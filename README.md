@@ -135,3 +135,9 @@ dotnet build -c Release /p:MelonLoaderDir="путь\к\MelonLoader\MelonLoader"
 Поддержка проекта:
 - [DonationAlerts](https://www.donationalerts.com/r/themarfa)
 - [Криптодонат NOWPayments](https://nowpayments.io/donation/themarfa)
+
+## Лицензия
+
+**Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)**
+
+См. [LICENSE](LICENSE) · https://creativecommons.org/licenses/by-nc-sa/4.0/
