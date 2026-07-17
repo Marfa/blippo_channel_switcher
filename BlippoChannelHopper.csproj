@@ -45,6 +45,14 @@
       <HintPath>$(BlippoGameDir)\Blippo+_Data\Managed\Assembly-CSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="NobleRobot.Local">
+      <HintPath>$(BlippoGameDir)\Blippo+_Data\Managed\NobleRobot.Local.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="NobleRobot.Save">
+      <HintPath>$(BlippoGameDir)\Blippo+_Data\Managed\NobleRobot.Save.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
   <Target Name="CopyToMods" AfterTargets="Build" Condition="Exists('$(BlippoGameDir)\Mods')">

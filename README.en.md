@@ -1,18 +1,21 @@
-# **Auto channel surfing for Blippo+ — on a timer, no remote**
+# **Auto channel surfing for Blippo+ — timer, end of slot, no remote**
 
-A [MelonLoader](https://github.com/LavaGang/MelonLoader) mod for [Blippo+](https://store.steampowered.com/app/3323850/Blippo/) that flips channels down while you watch live TV. Interval is in minutes; settings live in an in-game window.
+A [MelonLoader](https://github.com/LavaGang/MelonLoader) mod for [Blippo+](https://store.steampowered.com/app/3323850/Blippo/) that flips channels down while you watch live TV. Switch on a timer, at the end of a timeslot, skip snow channels, and periodically clear signal degradation. Settings live in an in-game window.
 
 ```text
-F10 → settings → enable → set interval → watch TV
+F10 → settings → enable the modes you want → watch TV
 ```
 
 | Feature | What it does |
 | --- | --- |
-| Auto hop | Every N minutes, switches channel down on the broadcast screen |
-| Settings window (F10) | On/off, 1–60 min slider, countdown to next switch |
-| Hotkeys | F9 — quick toggle, `[` / `]` — interval ±1 min |
+| Timer hop | Every N minutes, switches channel down on the broadcast screen |
+| Auto hop (end of broadcast) | Switches channel down when the current timeslot ends |
+| Skip snow | Automatically skips channels with `snowEpisodeObject` |
+| Disable signal loss | Every 120 s, forces `signalLossInProgress` to `false` |
+| Settings window (F10) | Mode checkboxes, 1–60 min slider, status lines |
+| Hotkeys | F9 — toggle timer hop, `[` / `]` — interval ±1 min |
 | Persistence | Settings saved to `UserData/MelonPreferences.cfg` |
-| Safety | Does not run in menus, the program guide, or modal dialogs |
+| Safety | Channel hopping does not run in menus, the program guide, or modal dialogs |
 
 > PC (Steam) only. Requires Blippo+ and MelonLoader.
 
@@ -43,7 +46,7 @@ C:\Program Files (x86)\Steam\steamapps\common\Blippo+\Blippo+.exe
 **Option A — from a release (easiest)**
 
 1. Open [Releases](https://github.com/Marfa/blippo_channel_switcher/releases).
-2. Download `BlippoChannelHopper.dll` from **v1.0.0**.
+2. Download `BlippoChannelHopper.dll` from **v1.1.0**.
 3. Drop the file into the game's `Mods` folder:
 
 ```text
@@ -67,7 +70,7 @@ Copy `bin\BlippoChannelHopper.dll` into the game's `Mods` folder.
 1. Launch Blippo+ through Steam.
 2. Get to the **TV broadcast** screen.
 3. Press **F10** to open the mod window.
-4. Enable **Auto channel hop** and set the interval in minutes.
+4. Enable the modes you want (for example **Timer hop**) and set the interval if needed.
 
 ---
 
@@ -76,11 +79,19 @@ Copy `bin\BlippoChannelHopper.dll` into the game's `Mods` folder.
 | Key | Action |
 | --- | --- |
 | **F10** | Settings window |
-| **F9** | Toggle auto hop on/off |
+| **F9** | Toggle **timer hop** on/off |
 | **`[`** | Interval −1 min |
 | **`]`** | Interval +1 min |
 
-In the settings window: checkbox, 1–60 min slider, **-1 min** / **+1 min** buttons, countdown to the next channel.
+In the settings window:
+
+- **Timer hop** — hop every N minutes
+- **Auto hop** — hop at the end of the timeslot
+- **Skip snow** — leave snow channels immediately
+- **Disable signal loss** — clear the degradation flag every 120 s
+- 1–60 min slider, **-1 min** / **+1 min** buttons, mode status lines
+
+Modes are independent and can run together.
 
 ---
 
@@ -95,6 +106,9 @@ Example:
 ```toml
 [BlippoChannelHopper]
 Enabled = false
+HopOnBroadcastEnd = false
+SkipSnow = false
+DisableSignalLoss = false
 IntervalMinutes = 1.0
 ```
 
@@ -118,11 +132,14 @@ The build needs DLLs from the installed game (`Blippo+_Data\Managed`) and MelonL
 dotnet build -c Release /p:MelonLoaderDir="path\to\MelonLoader\MelonLoader"
 ```
 
+After a successful build the DLL is copied into the game's `Mods` folder when that folder exists.
+
 ---
 
 ## Limitations
 
-- Works only on the **broadcast** screen (not EPG or menus).
+- Channel hopping works only on the **broadcast** screen (not EPG or menus).
+- Disabling signal loss only sets `signalLossInProgress = false` every 120 s; already drifted tuner values are not reset.
 - Unofficial mod — not supported by Panic or Steam Workshop.
 - MelonLoader is third-party software; use at your own risk.
 
@@ -135,3 +152,9 @@ Code prepared with [Cursor](https://cursor.com).
 Support the project:
 - [DonationAlerts](https://www.donationalerts.com/r/themarfa)
 - [Crypto donation via NOWPayments](https://nowpayments.io/donation/themarfa)
+
+## License
+
+**Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0)**
+
+See [LICENSE](LICENSE) · https://creativecommons.org/licenses/by-nc-sa/4.0/
