@@ -1,0 +1,11 @@
+#!/bin/sh
+# Blocks commits that contain secrets. Enable: git config core.hooksPath .githooks
+
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "gitleaks not found — install from https://github.com/gitleaks/gitleaks" >&2
+  echo "Skipping secret scan. Install gitleaks to enforce this check." >&2
+  exit 0
+fi
+
+gitleaks protect --staged --verbose
+exit $?
