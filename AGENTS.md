@@ -33,11 +33,14 @@ Security checks run in GitHub Actions on every push and pull request (see `.gith
 
 - Never commit API keys, tokens, passwords, or private paths with credentials.
 - `.env`, `libs/`, `decompiled/`, and `bin/` are gitignored — keep them that way.
-- A **pre-commit hook** (`.githooks/pre-commit`) runs `gitleaks protect` on staged files. Enable once per clone:
+- Git hooks live in `.githooks/`. Enable once per clone:
 
   ```powershell
   git config core.hooksPath .githooks
   ```
+
+  - **pre-commit** — runs `gitleaks protect` on staged files
+  - **post-commit** — deletes build artifacts in `bin/` and `obj/` older than 7 days
 
 ## Building
 
