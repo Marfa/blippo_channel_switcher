@@ -1,7 +1,8 @@
+using System.Reflection;
 using MelonLoader;
 using UnityEngine;
 
-[assembly: MelonInfo(typeof(BlippoChannelHopper.ChannelHopperMod), "Blippo Channel Hopper", "1.1.0", "Marfa")]
+[assembly: MelonInfo(typeof(BlippoChannelHopper.ChannelHopperMod), "Blippo Channel Hopper", "1.2.0", "Marfa")]
 
 [assembly: MelonGame("Noble Robot", "Blippo+")]
 
@@ -17,7 +18,7 @@ public sealed class ChannelHopperMod : MelonMod
     private const float DefaultIntervalMinutes = 1f;
     private const float SecondsPerMinute = 60f;
     private const float SignalLossDisableIntervalSeconds = 120f;
-    private const int UntrackedTimeSlot = int.MinValue;
+    private const double LoopWrapToleranceSeconds = 1.0;
 
     private MelonPreferences_Category _prefs = null!;
     private MelonPreferences_Entry<bool> _timerEnabled = null!;
@@ -25,18 +26,26 @@ public sealed class ChannelHopperMod : MelonMod
     private MelonPreferences_Entry<bool> _skipSnowEnabled = null!;
     private MelonPreferences_Entry<bool> _disableSignalLossEnabled = null!;
     private MelonPreferences_Entry<float> _intervalMinutes = null!;
+    private MelonPreferences_Entry<int> _uiLanguage = null!;
 
     private float _timer;
     private float _signalLossDisableTimer;
-    private int _trackedTimeSlot = UntrackedTimeSlot;
+    private double _trackedLoopTime = double.NaN;
     private bool _runtimeTimerEnabled;
     private bool _runtimeEndHopEnabled;
     private bool _runtimeSkipSnowEnabled;
     private bool _runtimeDisableSignalLossEnabled;
     private bool _showSettings;
-    private Rect _windowRect = new Rect(24f, 24f, 360f, 320f);
+    private Rect _windowRect = new Rect(24f, 24f, 420f, 420f);
+
+    private static FieldInfo? _channelsField;
+    private static MethodInfo? _getChannelIndexMethod;
+    private static MethodInfo? _getCurrentEpisodeMethod;
 
     private float IntervalSeconds => _intervalMinutes.Value * SecondsPerMinute;
+
+    private UiLanguage CurrentUiLanguage =>
+        (UiLanguage)Mathf.Clamp(_uiLanguage.Value, (int)UiLanguage.Auto, (int)UiLanguage.English);
 
     private bool AnyHopFeatureEnabled =>
         _runtimeTimerEnabled || _runtimeEndHopEnabled || _runtimeSkipSnowEnabled;
@@ -55,13 +64,13 @@ public sealed class ChannelHopperMod : MelonMod
         _endHopEnabled = _prefs.CreateEntry(
             "HopOnBroadcastEnd",
             false,
-            "Hop on broadcast end",
-            "Switch channel when the current timeslot ends");
+            "Hop on loop end",
+            "Switch channel when the full 5-timeslot broadcast loop completes");
         _skipSnowEnabled = _prefs.CreateEntry(
             "SkipSnow",
             false,
             "Skip snow",
-            "Automatically skip channels with snowEpisodeObject");
+            "Skip snow, weak-signal tips, locked access, Femtofax, and credits channels");
         _disableSignalLossEnabled = _prefs.CreateEntry(
             "DisableSignalLoss",
             false,
@@ -72,13 +81,25 @@ public sealed class ChannelHopperMod : MelonMod
             DefaultIntervalMinutes,
             "Interval (minutes)",
             "Delay between channel-down actions for timer hop");
+        _uiLanguage = _prefs.CreateEntry(
+            "UiLanguage",
+            (int)UiLanguage.Auto,
+            "UI language",
+            "0 = Auto (system), 1 = Russian, 2 = English");
 
         _runtimeTimerEnabled = _timerEnabled.Value;
         _runtimeEndHopEnabled = _endHopEnabled.Value;
+        if (_runtimeTimerEnabled && _runtimeEndHopEnabled)
+        {
+            _runtimeEndHopEnabled = false;
+            _endHopEnabled.Value = false;
+        }
+
         _runtimeSkipSnowEnabled = _skipSnowEnabled.Value;
         _runtimeDisableSignalLossEnabled = _disableSignalLossEnabled.Value;
         _timer = 0f;
         _signalLossDisableTimer = 0f;
+        ModStrings.Apply(CurrentUiLanguage);
 
         MelonLogger.Msg("Loaded. F9 = toggle timer, F10 = settings, [ / ] = interval -/+ 1 min");
         LogState();
@@ -91,7 +112,7 @@ public sealed class ChannelHopperMod : MelonMod
             return;
         }
 
-        _windowRect = GUILayout.Window(0xB11CC0, _windowRect, DrawSettingsWindow, "Blippo Channel Hopper");
+        _windowRect = GUILayout.Window(0xB11CC0, _windowRect, DrawSettingsWindow, ModStrings.WindowTitle);
     }
 
     public override void OnUpdate()
@@ -130,19 +151,26 @@ public sealed class ChannelHopperMod : MelonMod
             return;
         }
 
-        if (!CanHopChannel())
+        // Skip must run on FEMTOFAX too (channel 21), before the broadcast-only guards.
+        if (_runtimeSkipSnowEnabled)
         {
-            _timer = 0f;
-            _trackedTimeSlot = UntrackedTimeSlot;
-            return;
+            TrySkipUnwantedChannel();
         }
 
+        // Track loop time even when channel hops are temporarily blocked (menus, overlays).
         if (_runtimeEndHopEnabled)
         {
-            TryHopOnTimeslotEnd();
+            TryHopOnLoopEnd();
         }
 
-        if (_runtimeTimerEnabled)
+        if (!CanHopChannel())
+        {
+            if (_runtimeTimerEnabled)
+            {
+                return;
+            }
+        }
+        else if (_runtimeTimerEnabled)
         {
             _timer += Time.deltaTime;
             if (_timer >= IntervalSeconds)
@@ -150,11 +178,6 @@ public sealed class ChannelHopperMod : MelonMod
                 _timer = 0f;
                 HopChannelDown();
             }
-        }
-
-        if (_runtimeSkipSnowEnabled)
-        {
-            TrySkipSnow();
         }
     }
 
@@ -176,10 +199,52 @@ public sealed class ChannelHopperMod : MelonMod
         return GameManager.inWatchableState;
     }
 
-    private static bool IsSnowEpisode()
+    private static bool CanRunSkipCheck()
     {
-        EpisodeObject episode = GameManager.instance.broadcastDisplay.episodeObject;
-        return episode != null && episode.snowEpisodeObject != null;
+        if (Utilities.NeedToCancelInput())
+        {
+            return false;
+        }
+
+        SystemScreen.Type screen = GameManager.currentSystemScreen;
+        return screen == SystemScreen.Type.BROADCAST_DISPLAY
+            || screen == SystemScreen.Type.FEMTOFAX;
+    }
+
+    private static bool ShouldSkipCurrentChannel()
+    {
+        ChannelObject channel = GameManager.instance.currentlyTunedChannel;
+        return channel != null && ShouldSkipChannel(channel);
+    }
+
+    private static bool ShouldSkipChannel(ChannelObject channel)
+    {
+        if (channel.id == "fax" || channel.id == "blip")
+        {
+            return true;
+        }
+
+        if (GameManager.currentSystemScreen != SystemScreen.Type.BROADCAST_DISPLAY)
+        {
+            return false;
+        }
+
+        EpisodeObject? episode = GetCurrentEpisodeForChannel(channel);
+        if (episode == null)
+        {
+            return false;
+        }
+
+        if (episode.snowEpisodeObject != null || episode.nonVideoEpisode)
+        {
+            return true;
+        }
+
+        // ACC locked slots: AUX/LOCAL/GLOBAL/UNIVERSAL ACCESS ("CHANNEL LOCKED FOR … ACCESS").
+        ShowObject show = episode.show;
+        return show != null
+            && !string.IsNullOrEmpty(show.name)
+            && show.name.IndexOf("Access", System.StringComparison.OrdinalIgnoreCase) >= 0;
     }
 
     private void TryDisableSignalLoss()
@@ -204,33 +269,37 @@ public sealed class ChannelHopperMod : MelonMod
         ViewerData_v1.current.signalLossInProgress = false;
     }
 
-    private void TryHopOnTimeslotEnd()
+    /// <summary>
+    /// Hop when the full broadcast loop completes (~5 min). Uses currentTime wrap, not per-slot changes.
+    /// </summary>
+    private void TryHopOnLoopEnd()
     {
-        int slot = GameManager.currentTimeSlot;
-        if (_trackedTimeSlot == UntrackedTimeSlot)
+        double loopTime = GameManager.currentTime;
+
+        if (double.IsNaN(_trackedLoopTime))
         {
-            _trackedTimeSlot = slot;
+            _trackedLoopTime = loopTime;
             return;
         }
 
-        if (slot == _trackedTimeSlot)
+        bool loopWrapped = loopTime + LoopWrapToleranceSeconds < _trackedLoopTime;
+        _trackedLoopTime = loopTime;
+
+        if (!loopWrapped || !CanHopChannel())
         {
             return;
         }
 
-        _trackedTimeSlot = slot;
-        _timer = 0f;
         HopChannelDown();
     }
 
-    private void TrySkipSnow()
+    private void TrySkipUnwantedChannel()
     {
-        if (!IsSnowEpisode())
+        if (!CanRunSkipCheck() || !ShouldSkipCurrentChannel())
         {
             return;
         }
 
-        _timer = 0f;
         HopChannelDown();
     }
 
@@ -248,24 +317,27 @@ public sealed class ChannelHopperMod : MelonMod
         }
 
         SetInterval(next);
-        MelonLogger.Msg($"Interval: {FormatMinutes(_intervalMinutes.Value)}");
+        MelonLogger.Msg(ModStrings.Interval(_intervalMinutes.Value));
     }
 
     private void DrawSettingsWindow(int id)
     {
-        bool newTimerEnabled = GUILayout.Toggle(_runtimeTimerEnabled, "Переключение по таймеру");
+        DrawChannelLabel();
+        DrawLanguageSelector();
+
+        bool newTimerEnabled = GUILayout.Toggle(_runtimeTimerEnabled, ModStrings.TimerHop);
         if (newTimerEnabled != _runtimeTimerEnabled)
         {
             SetTimerEnabled(newTimerEnabled);
         }
 
-        bool newEndHopEnabled = GUILayout.Toggle(_runtimeEndHopEnabled, "Автопереключение");
+        bool newEndHopEnabled = GUILayout.Toggle(_runtimeEndHopEnabled, ModStrings.EndHop);
         if (newEndHopEnabled != _runtimeEndHopEnabled)
         {
             SetEndHopEnabled(newEndHopEnabled);
         }
 
-        bool newSkipSnowEnabled = GUILayout.Toggle(_runtimeSkipSnowEnabled, "Пропуск снега");
+        bool newSkipSnowEnabled = GUILayout.Toggle(_runtimeSkipSnowEnabled, ModStrings.SkipUnwanted);
         if (newSkipSnowEnabled != _runtimeSkipSnowEnabled)
         {
             SetSkipSnowEnabled(newSkipSnowEnabled);
@@ -273,14 +345,14 @@ public sealed class ChannelHopperMod : MelonMod
 
         bool newDisableSignalLoss = GUILayout.Toggle(
             _runtimeDisableSignalLossEnabled,
-            "Отключить деградацию сигнала");
+            ModStrings.DisableSignalLoss);
         if (newDisableSignalLoss != _runtimeDisableSignalLossEnabled)
         {
             SetDisableSignalLossEnabled(newDisableSignalLoss);
         }
 
         GUILayout.Space(6f);
-        GUILayout.Label($"Interval: {FormatMinutes(_intervalMinutes.Value)}");
+        GUILayout.Label(ModStrings.Interval(_intervalMinutes.Value));
         float newInterval = GUILayout.HorizontalSlider(
             _intervalMinutes.Value,
             MinIntervalMinutes,
@@ -291,12 +363,12 @@ public sealed class ChannelHopperMod : MelonMod
         }
 
         GUILayout.BeginHorizontal();
-        if (GUILayout.Button("-1 min"))
+        if (GUILayout.Button(ModStrings.MinusOneMin))
         {
             AdjustInterval(-1f);
         }
 
-        if (GUILayout.Button("+1 min"))
+        if (GUILayout.Button(ModStrings.PlusOneMin))
         {
             AdjustInterval(1f);
         }
@@ -306,9 +378,9 @@ public sealed class ChannelHopperMod : MelonMod
         DrawStatusLabel();
 
         GUILayout.Space(6f);
-        GUILayout.Label("F9 toggle timer | F10 settings | [ ] interval");
+        GUILayout.Label(ModStrings.Hotkeys);
 
-        if (GUILayout.Button("Close"))
+        if (GUILayout.Button(ModStrings.Close))
         {
             _showSettings = false;
         }
@@ -316,18 +388,202 @@ public sealed class ChannelHopperMod : MelonMod
         GUI.DragWindow();
     }
 
+    private void DrawChannelLabel()
+    {
+        if (GameManager.instance == null || GameManager.instance.currentlyTunedChannel == null)
+        {
+            GUILayout.Label(ModStrings.ChannelUnknown);
+            return;
+        }
+
+        ChannelObject current = GameManager.instance.currentlyTunedChannel;
+        string previous = FormatChannelLabel(GetAdjacentChannel(1));
+        string next = FormatChannelLabel(GetPredictedNextHopChannel());
+        string currentLabel = ModStrings.FormatChannelLabel(current);
+        float? hopMinutes = GetNextHopMinutes();
+
+        GUILayout.Label(ModStrings.ChannelStrip(previous, currentLabel, next, hopMinutes));
+    }
+
+    private static string FormatChannelLabel(ChannelObject? channel) =>
+        channel == null ? "—" : ModStrings.FormatChannelLabel(channel);
+
+    private float? GetNextHopMinutes()
+    {
+        if (_runtimeEndHopEnabled)
+        {
+            return Mathf.Max(0f, Config.instance.loopLength - (float)GameManager.currentTime) / SecondsPerMinute;
+        }
+
+        if (_runtimeTimerEnabled)
+        {
+            return Mathf.Max(0f, IntervalSeconds - _timer) / SecondsPerMinute;
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Next channel the mod will land on (channel-down, skipping unwanted channels when enabled).
+    /// </summary>
+    private ChannelObject? GetPredictedNextHopChannel()
+    {
+        ChannelObject? candidate = GetAdjacentChannel(-1);
+        if (!_runtimeSkipSnowEnabled || candidate == null)
+        {
+            return candidate;
+        }
+
+        EnsureChannelReflection();
+        if (_channelsField?.GetValue(GameManager.instance) is not System.Collections.IList channelList)
+        {
+            return candidate;
+        }
+
+        int safety = 0;
+        while (candidate != null && ShouldSkipChannel(candidate) && safety < channelList.Count)
+        {
+            candidate = GetAdjacentChannel(candidate, -1);
+            safety++;
+        }
+
+        return candidate;
+    }
+
+    private static ChannelObject? GetAdjacentChannel(int offset) =>
+        GetAdjacentChannel(GameManager.instance?.currentlyTunedChannel, offset);
+
+    private static ChannelObject? GetAdjacentChannel(ChannelObject? fromChannel, int offset)
+    {
+        GameManager gameManager = GameManager.instance;
+        if (gameManager == null || fromChannel == null)
+        {
+            return null;
+        }
+
+        EnsureChannelReflection();
+        if (_channelsField?.GetValue(gameManager) is not System.Collections.IList channelList || channelList.Count == 0)
+        {
+            return null;
+        }
+
+        int index = InvokeGetChannelIndex(fromChannel, offset);
+        if (index < 0 || index >= channelList.Count)
+        {
+            return null;
+        }
+
+        return channelList[index] is Channel channel ? channel.channelObject : null;
+    }
+
+    private static EpisodeObject? GetCurrentEpisodeForChannel(ChannelObject channel)
+    {
+        EnsureChannelReflection();
+        if (_getCurrentEpisodeMethod == null)
+        {
+            return null;
+        }
+
+        return _getCurrentEpisodeMethod.Invoke(GameManager.instance, new object[] { channel }) as EpisodeObject;
+    }
+
+    private static int InvokeGetChannelIndex(ChannelObject channel, int offset)
+    {
+        EnsureChannelReflection();
+        if (_getChannelIndexMethod == null)
+        {
+            GameManager gameManager = GameManager.instance;
+            if (_channelsField?.GetValue(gameManager) is not System.Collections.IList channelList || channelList.Count == 0)
+            {
+                return 0;
+            }
+
+            int baseIndex = 0;
+            for (int i = 0; i < channelList.Count; i++)
+            {
+                if (channelList[i] is Channel listedChannel && listedChannel.channelObject == channel)
+                {
+                    baseIndex = i;
+                    break;
+                }
+            }
+
+            int index = baseIndex + offset;
+            if (index >= channelList.Count)
+            {
+                index -= channelList.Count;
+            }
+            else if (index < 0)
+            {
+                index += channelList.Count;
+            }
+
+            return index;
+        }
+
+        return (int)_getChannelIndexMethod.Invoke(
+            GameManager.instance,
+            new object[] { channel, offset })!;
+    }
+
+    private static void EnsureChannelReflection()
+    {
+        if (_channelsField != null && _getChannelIndexMethod != null && _getCurrentEpisodeMethod != null)
+        {
+            return;
+        }
+
+        const BindingFlags instance = BindingFlags.NonPublic | BindingFlags.Instance;
+        _channelsField ??= typeof(GameManager).GetField("channels", instance);
+        _getChannelIndexMethod ??= typeof(GameManager).GetMethod(
+            "GetChannelIndex",
+            instance,
+            binder: null,
+            types: new[] { typeof(ChannelObject), typeof(int) },
+            modifiers: null);
+        _getCurrentEpisodeMethod ??= typeof(GameManager).GetMethod(
+            "GetCurrentEpisode",
+            instance,
+            binder: null,
+            types: new[] { typeof(ChannelObject) },
+            modifiers: null);
+    }
+
+    private void DrawLanguageSelector()
+    {
+        GUILayout.Label(ModStrings.LanguageLabel);
+        GUILayout.BeginHorizontal();
+        DrawLanguageButton(UiLanguage.Auto);
+        DrawLanguageButton(UiLanguage.Russian);
+        DrawLanguageButton(UiLanguage.English);
+        GUILayout.EndHorizontal();
+        GUILayout.Space(4f);
+    }
+
+    private void DrawLanguageButton(UiLanguage language)
+    {
+        bool selected = CurrentUiLanguage == language;
+        GUI.enabled = !selected;
+        if (GUILayout.Button(ModStrings.LanguageName(language)) && !selected)
+        {
+            SetUiLanguage(language);
+        }
+
+        GUI.enabled = true;
+    }
+
     private void DrawStatusLabel()
     {
         if (!AnyFeatureEnabled)
         {
-            GUILayout.Label("All features are off.");
+            GUILayout.Label(ModStrings.AllOff);
             return;
         }
 
         if (_runtimeDisableSignalLossEnabled)
         {
             float remaining = Mathf.Max(0f, SignalLossDisableIntervalSeconds - _signalLossDisableTimer);
-            GUILayout.Label($"Signal loss clear in: {remaining:0} s");
+            GUILayout.Label(ModStrings.SignalLossClear(remaining));
         }
 
         if (!AnyHopFeatureEnabled)
@@ -335,44 +591,61 @@ public sealed class ChannelHopperMod : MelonMod
             return;
         }
 
-        if (!CanHopChannel())
+        if (_runtimeSkipSnowEnabled && CanRunSkipCheck())
         {
-            GUILayout.Label("Waiting for TV broadcast screen...");
-            return;
+            GUILayout.Label(ShouldSkipCurrentChannel() ? ModStrings.SkipHopping : ModStrings.SkipOn);
         }
 
         if (_runtimeTimerEnabled)
         {
-            GUILayout.Label(
-                $"Next timer hop in: {FormatMinutes(Mathf.Max(0f, IntervalSeconds - _timer) / SecondsPerMinute)}");
+            float remaining = Mathf.Max(0f, IntervalSeconds - _timer) / SecondsPerMinute;
+            GUILayout.Label(ModStrings.NextTimerHop(remaining));
         }
 
         if (_runtimeEndHopEnabled)
         {
-            GUILayout.Label("End hop: waiting for current broadcast to finish...");
+            float remaining = Mathf.Max(0f, Config.instance.loopLength - (float)GameManager.currentTime) / SecondsPerMinute;
+            GUILayout.Label(ModStrings.EndHopWaiting(remaining));
         }
 
-        if (_runtimeSkipSnowEnabled)
+        if (!CanHopChannel())
         {
-            GUILayout.Label(IsSnowEpisode() ? "Skip snow: hopping..." : "Skip snow: on");
+            GUILayout.Label(ModStrings.WaitingBroadcast);
         }
     }
 
     private void SetTimerEnabled(bool enabled)
     {
+        if (enabled && _runtimeEndHopEnabled)
+        {
+            _runtimeEndHopEnabled = false;
+            _endHopEnabled.Value = false;
+            _trackedLoopTime = double.NaN;
+        }
+
         _runtimeTimerEnabled = enabled;
         _timerEnabled.Value = enabled;
         MelonPreferences.Save();
-        _timer = 0f;
+        if (enabled)
+        {
+            _timer = 0f;
+        }
+
         LogState();
     }
 
     private void SetEndHopEnabled(bool enabled)
     {
+        if (enabled && _runtimeTimerEnabled)
+        {
+            _runtimeTimerEnabled = false;
+            _timerEnabled.Value = false;
+        }
+
         _runtimeEndHopEnabled = enabled;
         _endHopEnabled.Value = enabled;
         MelonPreferences.Save();
-        _trackedTimeSlot = UntrackedTimeSlot;
+        _trackedLoopTime = double.NaN;
         LogState();
     }
 
@@ -398,16 +671,18 @@ public sealed class ChannelHopperMod : MelonMod
         LogState();
     }
 
+    private void SetUiLanguage(UiLanguage language)
+    {
+        _uiLanguage.Value = (int)language;
+        MelonPreferences.Save();
+        ModStrings.Apply(language);
+    }
+
     private void SetInterval(float minutes)
     {
         _intervalMinutes.Value = Mathf.Clamp(minutes, MinIntervalMinutes, MaxIntervalMinutes);
         MelonPreferences.Save();
         _timer = 0f;
-    }
-
-    private static string FormatMinutes(float minutes)
-    {
-        return $"{minutes:0.#} min";
     }
 
     private void LogState()
@@ -417,6 +692,6 @@ public sealed class ChannelHopperMod : MelonMod
         string skipSnow = _runtimeSkipSnowEnabled ? "ON" : "OFF";
         string signalLoss = _runtimeDisableSignalLossEnabled ? "ON" : "OFF";
         MelonLogger.Msg(
-            $"Timer hop {timer} | end hop {endHop} | skip snow {skipSnow} | disable signal loss {signalLoss} | interval {FormatMinutes(_intervalMinutes.Value)}");
+            $"Timer hop {timer} | end hop {endHop} | skip unwanted {skipSnow} | disable signal loss {signalLoss} | {ModStrings.Interval(_intervalMinutes.Value)}");
     }
 }

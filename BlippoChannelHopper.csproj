@@ -13,7 +13,15 @@
 
   <ItemGroup>
     <Compile Remove="decompiled\**" />
+    <Compile Remove="decompiled-temp\**" />
+    <Compile Remove="decompiled-temp2\**" />
+    <Compile Remove="decompiled-temp3\**" />
+    <Compile Remove="decompiled-temp4\**" />
     <None Remove="decompiled\**" />
+    <None Remove="decompiled-temp\**" />
+    <None Remove="decompiled-temp2\**" />
+    <None Remove="decompiled-temp3\**" />
+    <None Remove="decompiled-temp4\**" />
   </ItemGroup>
 
   <ItemGroup>

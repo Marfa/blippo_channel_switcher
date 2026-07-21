@@ -9,10 +9,10 @@ F10 → settings → enable the modes you want → watch TV
 | Feature | What it does |
 | --- | --- |
 | Timer hop | Every N minutes, switches channel down on the broadcast screen |
-| Auto hop (end of broadcast) | Switches channel down when the current timeslot ends |
-| Skip snow | Automatically skips channels with `snowEpisodeObject` |
+| Auto hop (end of loop) | Switches channel down after the full 5-show loop (~5 min), not after each show |
+| Skip snow and interference | Snow (CMBR), weak-signal tips (MEGA), locked ACCESS (72), Femtofax (21), credits (25) |
 | Disable signal loss | Every 120 s, forces `signalLossInProgress` to `false` |
-| Settings window (F10) | Mode checkboxes, 1–60 min slider, status lines |
+| Settings window (F10) | Channel strip (prev > current > next), UI language, checkboxes, slider, countdown |
 | Hotkeys | F9 — toggle timer hop, `[` / `]` — interval ±1 min |
 | Persistence | Settings saved to `UserData/MelonPreferences.cfg` |
 | Safety | Channel hopping does not run in menus, the program guide, or modal dialogs |
@@ -46,7 +46,7 @@ C:\Program Files (x86)\Steam\steamapps\common\Blippo+\Blippo+.exe
 **Option A — from a release (easiest)**
 
 1. Open [Releases](https://github.com/Marfa/blippo_channel_switcher/releases).
-2. Download `BlippoChannelHopper.dll` from **v1.1.0**.
+2. Download `BlippoChannelHopper.dll` from **v1.2.0**.
 3. Drop the file into the game's `Mods` folder:
 
 ```text
@@ -85,13 +85,17 @@ Copy `bin\BlippoChannelHopper.dll` into the game's `Mods` folder.
 
 In the settings window:
 
-- **Timer hop** — hop every N minutes
-- **Auto hop** — hop at the end of the timeslot
-- **Skip snow** — leave snow channels immediately
+- **channel strip**: `prev > current > next` and **“Switch in: N min”** (countdown for the active mode — timer *or* auto hop)
+- **UI language**: Auto (system) / Русский / English
+- **Timer hop** — every N minutes (cannot be enabled together with auto hop)
+- **Auto hop** — after the full 5-show loop (~5 min)
+- **Skip snow and interference** — CMBR, MEGA, locked ACCESS on 72, Femtofax (21), credits (25); “next” channel reflects the skip chain
 - **Disable signal loss** — clear the degradation flag every 120 s
-- 1–60 min slider, **-1 min** / **+1 min** buttons, mode status lines
+- 1–60 min slider, **−1 min** / **+1 min** buttons, status lines
 
-Modes are independent and can run together.
+**Timer hop** and **Auto hop** are mutually exclusive — enabling one disables the other. **Skip snow and interference** and **Disable signal loss** are independent and can combine with either hop mode.
+
+The timer **does not reset** when you change channels manually with the remote.
 
 ---
 
@@ -110,7 +114,10 @@ HopOnBroadcastEnd = false
 SkipSnow = false
 DisableSignalLoss = false
 IntervalMinutes = 1.0
+UiLanguage = 0
 ```
+
+`UiLanguage`: `0` — auto, `1` — Russian, `2` — English.
 
 You do not need to edit this file manually — use **F10** in-game.
 
